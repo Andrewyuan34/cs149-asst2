@@ -114,38 +114,39 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    for (int i = 0; i < num_threads; ++i){
-            workers.emplace_back([this] { worker_thread(); });
-    }
+    for (int i = 0; i < num_threads; ++i) {
+        workers.emplace_back([this] { worker_thread(); });
+    }                           
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
-    {
-            std::unique_lock<std::mutex> lock(mutex);
-            stop = true;
-        }
-        condition.notify_all();
-        for (std::thread &worker : workers)
-            if (worker.joinable())
-                worker.join();
+    
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
-
-
     //
     // TODO: CS149 students will modify the implementation of this
     // method in Part A.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
-
-    for (int i = 0; i < num_total_tasks; i++) {
-            std::unique_lock<std::mutex> lock(mutex);
-            tasks.emplace([=] { runnable->runTask(i, num_total_tasks); });
+        stop = true;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            for (int i = 0; i < num_total_tasks; ++i) {
+                tasks.emplace([=] { runnable->runTask(i, num_total_tasks); });
+            }
         }
-        condition.notify_all();
 
-        // Wait for all tasks to complete
+       // Busy-wait until all tasks are complete
+        while (active_tasks.load(std::memory_order_relaxed) > 0) {
+            std::this_thread::yield(); // Yield to reduce CPU usage
+        }
+
+        
+        for (auto& worker : workers) {
+            if (worker.joinable())
+                worker.join();
+        }
     
 }
 
@@ -177,10 +178,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    workers.reserve(num_threads);
-        for(int i = 0; i < num_threads; ++i) {
+    for (int i = 0; i < num_threads; ++i){
             workers.emplace_back([this] { worker_thread(); });
-        }
+    }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -190,16 +190,12 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    {
-            std::unique_lock<std::mutex> lock(queueMutex);
+        /*{
+            std::unique_lock<std::mutex> lock(mutex);
             stop = true;
-        }
-        condition.notify_all();
-        for (auto& worker : workers) {
-            if (worker.joinable()) {
-                worker.join();
-            }
-        }
+        }*/
+        //condition.notify_all();
+        
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
@@ -210,18 +206,17 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     // method in Parts A and B.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
+    for (int i = 0; i < num_total_tasks; i++) {
+            std::unique_lock<std::mutex> lock(mutex); // protect access to tasks, which is shared among threads
+            tasks.emplace([=] { runnable->runTask(i, num_total_tasks); });
+    }
+    stop = true;
+    condition.notify_all();
 
-    {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            for (int i = 0; i < num_total_tasks; i++) {
-                tasks.emplace([=] { runnable->runTask(i, num_total_tasks); });
-            }
-        }
-        condition.notify_all();
-
-        // Wait for all tasks to be completed
-        std::unique_lock<std::mutex> lock(queueMutex);
-        allTasksDoneCondition.wait(lock, [this] { return activeTasks == 0 && tasks.empty(); });
+    // Wait for all tasks to complete
+    for (std::thread &worker : workers)
+        if (worker.joinable())
+            worker.join();
 }
 
 

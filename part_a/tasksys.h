@@ -60,27 +60,29 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
                                 const std::vector<TaskID>& deps);
         void sync();
     private:
-
-        private:
     std::vector<std::thread> workers;
     std::queue<std::function<void()>> tasks;
     std::mutex mutex;
-    std::condition_variable condition;
-    bool stop = false;
+    std::atomic<bool> stop{false};
+    std::atomic<int> active_tasks{0};
 
     void worker_thread() {
-        while (true) {
-            //std::cout << "worker_thread: " << std::this_thread::get_id() << "\n";
+        while (!stop) {
             std::function<void()> task;
             {
-                std::unique_lock<std::mutex> lock(mutex);
-                condition.wait(lock, [this] { return stop || !tasks.empty(); });
-                if (stop && tasks.empty())
-                    break;
-                task = std::move(tasks.front());
-                tasks.pop();
+                std::lock_guard<std::mutex> lock(mutex);
+                if (!tasks.empty()) {
+                    task = std::move(tasks.front());
+                    tasks.pop();
+                }
             }
-            task();
+            if (task) {
+                active_tasks.fetch_add(1, std::memory_order_relaxed);
+                task();
+                active_tasks.fetch_sub(1, std::memory_order_relaxed);
+            }
+            // Active waiting, little to no sleep
+            std::this_thread::yield(); // Yield to reduce CPU usage slightly
         }
     }
 };
@@ -104,32 +106,24 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
     std::vector<std::thread> workers;
     std::queue<std::function<void()>> tasks;
-    std::mutex queueMutex;
+    std::mutex mutex;
     std::condition_variable condition;
-    std::condition_variable allTasksDoneCondition;
-    int activeTasks = 0;
     bool stop = false;
 
     void worker_thread() {
         while (true) {
-            std::function<void()> task;
+            //std::function<void()> 是一个泛型函数封装器，可以存储几乎任何类型的可调用对象（如函
+            //数指针、lambda 表达式、绑定表达式或其他函数对象），只要它们不接受参数并且不返回值。
+            std::function<void()> task; 
             {
-                std::unique_lock<std::mutex> lock(queueMutex);
+                std::unique_lock<std::mutex> lock(mutex);
                 condition.wait(lock, [this] { return stop || !tasks.empty(); });
                 if (stop && tasks.empty())
-                    return;
+                    break;
                 task = std::move(tasks.front());
                 tasks.pop();
-                activeTasks++;
             }
             task();
-            {
-                std::unique_lock<std::mutex> lock(queueMutex);
-                activeTasks--;
-                if (activeTasks == 0 && tasks.empty()) {
-                    allTasksDoneCondition.notify_one();
-                }
-            }
         }
     }
 };
