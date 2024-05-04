@@ -2,6 +2,14 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <thread>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <functional>
+#include <iostream>
+
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -51,6 +59,30 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+    private:
+
+        private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool stop = false;
+
+    void worker_thread() {
+        while (true) {
+            //std::cout << "worker_thread: " << std::this_thread::get_id() << "\n";
+            std::function<void()> task;
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                condition.wait(lock, [this] { return stop || !tasks.empty(); });
+                if (stop && tasks.empty())
+                    break;
+                task = std::move(tasks.front());
+                tasks.pop();
+            }
+            task();
+        }
+    }
 };
 
 /*
@@ -68,6 +100,38 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+
+    private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex queueMutex;
+    std::condition_variable condition;
+    std::condition_variable allTasksDoneCondition;
+    int activeTasks = 0;
+    bool stop = false;
+
+    void worker_thread() {
+        while (true) {
+            std::function<void()> task;
+            {
+                std::unique_lock<std::mutex> lock(queueMutex);
+                condition.wait(lock, [this] { return stop || !tasks.empty(); });
+                if (stop && tasks.empty())
+                    return;
+                task = std::move(tasks.front());
+                tasks.pop();
+                activeTasks++;
+            }
+            task();
+            {
+                std::unique_lock<std::mutex> lock(queueMutex);
+                activeTasks--;
+                if (activeTasks == 0 && tasks.empty()) {
+                    allTasksDoneCondition.notify_one();
+                }
+            }
+        }
+    }
 };
 
 #endif
