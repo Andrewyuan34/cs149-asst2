@@ -114,9 +114,8 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    for (int i = 0; i < num_threads; ++i) {
-        workers.emplace_back([this] { worker_thread(); });
-    }                           
+    exitFlag = false;
+	for (int i = 0; i < num_threads; ++i) threads.emplace_back(&TaskSystemParallelThreadPoolSpinning::worker, this);                  
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
@@ -129,25 +128,19 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     // method in Part A.  The implementation provided below runs all
     // tasks sequentially on the calling thread.
     //
-        stop = true;
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            for (int i = 0; i < num_total_tasks; ++i) {
-                tasks.emplace([=] { runnable->runTask(i, num_total_tasks); });
-            }
-        }
-
-       // Busy-wait until all tasks are complete
-        while (active_tasks.load(std::memory_order_relaxed) > 0) {
-            std::this_thread::yield(); // Yield to reduce CPU usage
-        }
-
         
-        for (auto& worker : workers) {
-            if (worker.joinable())
-                worker.join();
-        }
-    
+    myRunnable = runnable;
+	taskRemained = num_total_tasks;
+	numTotalTasks = num_total_tasks;
+	for (int i = 0; i < num_total_tasks; i++) {
+		queueMutex.lock();
+		taskQueue.push(i);
+		queueMutex.unlock();
+	}
+	while (taskRemained);
+
+    exitFlag = true;
+	for (auto &thread: threads) { thread.join(); }
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

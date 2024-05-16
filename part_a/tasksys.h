@@ -60,29 +60,29 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
                                 const std::vector<TaskID>& deps);
         void sync();
     private:
-    std::vector<std::thread> workers;
-    std::queue<std::function<void()>> tasks;
-    std::mutex mutex;
-    std::atomic<bool> stop{false};
-    std::atomic<int> active_tasks{0};
+    std::vector<std::thread> threads;
+    std::mutex queueMutex;
+    std::atomic<int> taskRemained;
+    std::queue<int> taskQueue;
+    IRunnable *myRunnable{};
+    bool exitFlag;
+    int numTotalTasks;
 
-    void worker_thread() {
-        while (!stop) {
-            std::function<void()> task;
-            {
-                std::lock_guard<std::mutex> lock(mutex);
-                if (!tasks.empty()) {
-                    task = std::move(tasks.front());
-                    tasks.pop();
-                }
+    void worker() {
+        int taskId;
+        while (!exitFlag) {
+            taskId = -1;
+            queueMutex.lock();
+            if (!taskQueue.empty()) {
+                taskId = taskQueue.front();
+                taskQueue.pop();
             }
-            if (task) {
-                active_tasks.fetch_add(1, std::memory_order_relaxed);
-                task();
-                active_tasks.fetch_sub(1, std::memory_order_relaxed);
+            queueMutex.unlock();
+
+            if (taskId != -1) {
+                myRunnable->runTask(taskId, numTotalTasks);
+                taskRemained--;
             }
-            // Active waiting, little to no sleep
-            std::this_thread::yield(); // Yield to reduce CPU usage slightly
         }
     }
 };
